@@ -27,6 +27,8 @@ def format_time(time_str):
     except Exception:
         return None
 
+from datetime import datetime, timezone
+
 def get_horaires(stop_id):
     params = {"MonitoringRef": stop_id}
     headers = {"apiKey": API_KEY}
@@ -38,18 +40,28 @@ def get_horaires(stop_id):
     horaires = []
     nom_arret = "Inconnu"
     direction = "Inconnue"
+    now = datetime.now(timezone.utc)
 
-    for v in visits[:3]:
+    for v in visits:
         call = v["MonitoredVehicleJourney"]["MonitoredCall"]
         arret = call["StopPointName"][0]["value"]
         direction_name = v["MonitoredVehicleJourney"]["DirectionName"][0]["value"]
-        heure = format_time(call.get("ExpectedArrivalTime") or call.get("ExpectedDepartureTime"))
-        if heure:
-            horaires.append(heure)
-            nom_arret = arret
-            direction = direction_name
+        raw_time = call.get("ExpectedArrivalTime") or call.get("ExpectedDepartureTime")
+
+        try:
+            dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+            if dt > now:  # ✅ ne garde que les horaires futurs
+                horaires.append(dt.astimezone().strftime("%H:%M"))
+                nom_arret = arret
+                direction = direction_name
+        except Exception:
+            continue
+
+        if len(horaires) >= 3:
+            break
 
     return nom_arret, direction, horaires
+
 
 @app.post("/slack")
 async def slack_command(request: Request):
