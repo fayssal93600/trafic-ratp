@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
-from datetime import datetime
 import httpx
 import urllib.parse
+from datetime import datetime, timezone
 
+from datetime import datetime, timezone, timedelta
 app = FastAPI()
 
 API_KEY = "TTqTJV4QWutZHjiYDJNOrNc4d1YcN7aL"
@@ -27,40 +28,47 @@ def format_time(time_str):
     except Exception:
         return None
 
-from datetime import datetime, timezone
+
 
 def get_horaires(stop_id):
     params = {"MonitoringRef": stop_id}
     headers = {"apiKey": API_KEY}
 
-    response = httpx.get(BASE_URL, params=params, headers=headers, timeout=10)
-    data = response.json()
-    visits = data["Siri"]["ServiceDelivery"]["StopMonitoringDelivery"][0].get("MonitoredStopVisit", [])
+    try:
+        response = httpx.get(BASE_URL, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+    except Exception:
+        return "Inconnu", "Inconnue", []
+
+    visits = data.get("Siri", {}).get("ServiceDelivery", {}).get("StopMonitoringDelivery", [{}])[0].get("MonitoredStopVisit", [])
 
     horaires = []
     nom_arret = "Inconnu"
     direction = "Inconnue"
-    now = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+
+    # Décalage horaire France (UTC+2 en été)
+    france_tz = timezone(timedelta(hours=2))
 
     for v in visits:
-        call = v["MonitoredVehicleJourney"]["MonitoredCall"]
-        arret = call["StopPointName"][0]["value"]
-        direction_name = v["MonitoredVehicleJourney"]["DirectionName"][0]["value"]
-        raw_time = call.get("ExpectedArrivalTime") or call.get("ExpectedDepartureTime")
-
         try:
-            dt = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
-            if dt > now:  # ✅ ne garde que les horaires futurs
-                horaires.append(dt.astimezone().strftime("%H:%M"))
-                nom_arret = arret
-                direction = direction_name
+            call = v["MonitoredVehicleJourney"]["MonitoredCall"]
+            raw_time = call.get("ExpectedArrivalTime") or call.get("ExpectedDepartureTime")
+            dt_utc = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+
+            if dt_utc > now_utc:
+                horaires.append(dt_utc.astimezone(france_tz).strftime("%H:%M"))
+                nom_arret = call["StopPointName"][0]["value"]
+                direction = v["MonitoredVehicleJourney"]["DirectionName"][0]["value"]
+
+            if len(horaires) >= 3:
+                break
         except Exception:
             continue
 
-        if len(horaires) >= 3:
-            break
-
     return nom_arret, direction, horaires
+
 
 
 @app.post("/slack")
